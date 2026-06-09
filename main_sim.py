@@ -66,16 +66,16 @@ SIM_SUBSTEPS : int = 20
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVO_LABELS: list[str] = [
-    "Forearm Yaw",   # DoF 1 → robot base pan
-    "Wrist Tilt",    # DoF 2 → robot shoulder
-    "Wrist Roll",    # DoF 3 → robot elbow
-    "—", "—", "—",  # unused
+    "Side Lean",      # DoF 1 — L/R forearm tilt   → robot base pan
+    "Forward Lean",   # DoF 2 — F/B forearm tilt   → robot shoulder
+    "Wrist Roll",     # DoF 3 — hand twist          → robot elbow
+    "—", "—", "—",   # unused
 ]
 
 _BAR_COLORS: list[tuple[int, int, int]] = [
-    (0,   200, 255),   # Forearm Yaw — amber-yellow
-    (0,   255, 160),   # Wrist Tilt  — mint green
-    (200,  80, 255),   # Wrist Roll  — violet
+    (0,   200, 255),   # Side Lean    — amber-yellow
+    (0,   255, 160),   # Forward Lean — mint green
+    (200,  80, 255),   # Wrist Roll   — violet
     (60,   60,  60),   # unused
     (60,   60,  60),   # unused
     (60,   60,  60),   # unused
@@ -176,7 +176,7 @@ def main() -> None:
     print(f"  Camera: {CAMERA_INDEX}  |  Target: {TARGET_FPS} FPS  "
           f"|  EMA α: {SMOOTH_ALPHA}")
     print("  Control: hold RIGHT forearm vertical (elbow down, wrist up)")
-    print("  DoF1=Forearm Yaw  DoF2=Wrist Tilt  DoF3=Wrist Roll  (* in sidebar)")
+    print("  DoF1=Side Lean (L/R)  DoF2=Forward Lean (F/B)  DoF3=Wrist Roll")
     print("  Press  Q  in the OpenCV window or close MuJoCo to quit.")
     print("=" * 58)
 
