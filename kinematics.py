@@ -184,4 +184,8 @@ def joints_to_angles(pose_landmarks: Any,
         pinky_mcp = _lm_to_np(hl[17])
         wrist_roll = compute_wrist_roll(elbow, wrist, index_mcp, pinky_mcp)
 
-    return [side_lean, forward_lean, wrist_roll, 90, 90, 45]
+    # Order: [rotation_dof, inclination_dof_1, inclination_dof_2, ...]
+    # Wrist roll  → base pan   (rotation  drives rotation)
+    # Forward lean→ shoulder   (inclination drives inclination)
+    # Side lean   → elbow      (inclination drives inclination)
+    return [wrist_roll, forward_lean, side_lean, 90, 90, 45]

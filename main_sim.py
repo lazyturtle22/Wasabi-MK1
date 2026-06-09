@@ -66,16 +66,16 @@ SIM_SUBSTEPS : int = 20
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVO_LABELS: list[str] = [
-    "Side Lean",      # DoF 1 — L/R forearm tilt   → robot base pan
-    "Forward Lean",   # DoF 2 — F/B forearm tilt   → robot shoulder
-    "Wrist Roll",     # DoF 3 — hand twist          → robot elbow
+    "Wrist Roll",     # DoF 1 — rotation    → base pan    (rotation  joint)
+    "Forward Lean",   # DoF 2 — inclination → shoulder    (tilt      joint)
+    "Side Lean",      # DoF 3 — inclination → elbow bend  (tilt      joint)
     "—", "—", "—",   # unused
 ]
 
 _BAR_COLORS: list[tuple[int, int, int]] = [
-    (0,   200, 255),   # Side Lean    — amber-yellow
-    (0,   255, 160),   # Forward Lean — mint green
     (200,  80, 255),   # Wrist Roll   — violet
+    (0,   255, 160),   # Forward Lean — mint green
+    (0,   200, 255),   # Side Lean    — amber-yellow
     (60,   60,  60),   # unused
     (60,   60,  60),   # unused
     (60,   60,  60),   # unused
