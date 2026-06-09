@@ -66,16 +66,19 @@ SIM_SUBSTEPS : int = 20
 # ══════════════════════════════════════════════════════════════════════════════
 
 _SERVO_LABELS: list[str] = [
-    "Base Pan", "Shoulder", "Elbow", "Wrist Pitch", "Wrist Roll", "Gripper",
+    "Forearm Yaw",   # DoF 1 → robot base pan
+    "Wrist Tilt",    # DoF 2 → robot shoulder
+    "Wrist Roll",    # DoF 3 → robot elbow
+    "—", "—", "—",  # unused
 ]
 
 _BAR_COLORS: list[tuple[int, int, int]] = [
-    (0,   200, 255),   # Base Pan    — amber-yellow
-    (0,   255, 160),   # Shoulder    — mint green
-    (0,   255,  60),   # Elbow       — bright green
-    (80,  200, 255),   # Wrist Pitch — sky blue
+    (0,   200, 255),   # Forearm Yaw — amber-yellow
+    (0,   255, 160),   # Wrist Tilt  — mint green
     (200,  80, 255),   # Wrist Roll  — violet
-    (255, 160,  60),   # Gripper     — orange
+    (60,   60,  60),   # unused
+    (60,   60,  60),   # unused
+    (60,   60,  60),   # unused
 ]
 
 # Mark the 3 simulated joints with a highlighted border in the sidebar
@@ -104,7 +107,7 @@ def _draw_sidebar(canvas: "np.ndarray", angles: list[int]) -> None:
 
     for i, (label, angle, color) in enumerate(zip(_SERVO_LABELS, angles, _BAR_COLORS)):
         y0      = 50 + i * slot_h
-        max_ang = 90 if label == "Gripper" else 180
+        max_ang = 180
         bar_w   = int(bar_max * angle / max_ang)
         star    = "*" if i in _SIM_JOINTS else " "
 
@@ -172,7 +175,8 @@ def main() -> None:
     print("  Wasabi-MK1 | Phase 1 + MuJoCo 3-DoF Simulation")
     print(f"  Camera: {CAMERA_INDEX}  |  Target: {TARGET_FPS} FPS  "
           f"|  EMA α: {SMOOTH_ALPHA}")
-    print("  Simulated joints: Base Pan, Shoulder, Elbow  (* in sidebar)")
+    print("  Control: hold RIGHT forearm vertical (elbow down, wrist up)")
+    print("  DoF1=Forearm Yaw  DoF2=Wrist Tilt  DoF3=Wrist Roll  (* in sidebar)")
     print("  Press  Q  in the OpenCV window or close MuJoCo to quit.")
     print("=" * 58)
 

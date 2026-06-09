@@ -1,28 +1,26 @@
 """
-kinematics.py - Maps MediaPipe 3D joint coordinates to robot servo angles.
+kinematics.py - Maps MediaPipe forearm+hand pose to 3-DoF robot servo angles.
 
-MediaPipe Pose world-coordinate conventions (used throughout this file):
-  X  : horizontal — positive = subject's right
-  Y  : vertical   — positive = DOWNWARD  (inverted from intuition)
-  Z  : depth      — positive = toward camera
+Control posture: hold forearm roughly vertical with elbow pointing DOWN and
+wrist pointing UP.  Three gestures drive the robot:
 
-All angles are returned as integers in [0, 180] degrees to match
-standard servo PWM ranges.
+  DoF 1 — Forearm Yaw   : swing the wrist left/right around the elbow pivot
+                           (rotation around the vertical / elbow axis)
+  DoF 2 — Wrist Tilt    : incline/bend the wrist relative to the forearm axis
+                           (flexion / extension of the wrist joint)
+  DoF 3 — Wrist Roll    : rotate the hand around the forearm axis
+                           (pronation / supination)
 
-Body-relative frame
--------------------
-Base pan and shoulder tilt are computed in the body's LOCAL coordinate
-frame (origin = tracked shoulder, axes derived from the shoulder line and
-world vertical).  This makes both angles invariant to body translation and
-rotation — only the tracked arm's movement relative to the torso matters.
+Required landmarks
+  Pose  : elbow (13 or 14), wrist (15 or 16)
+  Hands : wrist(0), index_mcp(5), pinky_mcp(17)
 
-Joint mapping:
-  Servo 1 — Base Pan    : horizontal yaw of the upper arm in the body frame
-  Servo 2 — Shoulder    : elevation of the upper arm from body-vertical
-  Servo 3 — Elbow       : interior bend angle at the elbow
-  Servo 4 — Wrist Pitch : hand flexion / extension relative to forearm
-  Servo 5 — Wrist Roll  : pronation / supination of the hand
-  Servo 6 — Gripper     : thumb-tip to index-tip pinch distance
+MediaPipe world-coordinate conventions:
+  X  positive = subject's right
+  Y  positive = DOWNWARD  (inverted)
+  Z  positive = toward camera
+
+All angles returned as integers in [0, 180]° for servo compatibility.
 """
 
 from __future__ import annotations
@@ -34,20 +32,19 @@ from typing import Any, Optional
 # ── Geometry primitives ────────────────────────────────────────────────────────
 
 def _unit(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Return the unit vector pointing from *a* to *b*."""
+    """Unit vector from *a* to *b*; returns zero vector if degenerate."""
     v = b - a
     n = float(np.linalg.norm(v))
     return v / n if n > 1e-7 else np.zeros(3, dtype=float)
 
 
 def _angle_deg(v1: np.ndarray, v2: np.ndarray) -> float:
-    """Angle in degrees between two vectors (need not be unit vectors)."""
+    """Angle in degrees between two vectors."""
     n1 = float(np.linalg.norm(v1))
     n2 = float(np.linalg.norm(v2))
     if n1 < 1e-7 or n2 < 1e-7:
         return 90.0
-    cos_a = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
-    return float(np.degrees(np.arccos(cos_a)))
+    return float(np.degrees(np.arccos(np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0))))
 
 
 def _clamp(value: float, lo: float = 0.0, hi: float = 180.0) -> int:
@@ -55,212 +52,149 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 180.0) -> int:
 
 
 def _lm_to_np(landmark) -> np.ndarray:
-    """Convert a MediaPipe landmark object to a numpy (x, y, z) array."""
     return np.array([landmark.x, landmark.y, landmark.z], dtype=float)
 
 
-# ── Body-relative frame ────────────────────────────────────────────────────────
+def _project_perp(v: np.ndarray, axis: np.ndarray) -> np.ndarray:
+    """Remove the component of *v* along *axis* (axis must be a unit vector)."""
+    return v - np.dot(v, axis) * axis
 
-def _body_frame(sh_l: np.ndarray, sh_r: np.ndarray):
+
+# ── 3-DoF forearm+hand calculations ───────────────────────────────────────────
+
+def compute_forearm_yaw(elbow: np.ndarray, wrist: np.ndarray) -> int:
     """
-    Build an orthonormal body frame from the two shoulder positions.
+    DoF 1 — Forearm Yaw.
 
-    Returns (body_right, body_up, body_forward) as unit vectors.
+    Project the elbow→wrist vector onto the horizontal plane and measure
+    its compass bearing relative to the camera's forward (−Z) axis.
 
-    body_right   : left shoulder → right shoulder
-    body_up      : perpendicular to body_right, pointing upward (−Y in MediaPipe)
-    body_forward : cross(body_right, body_up) — pointing in front of the subject
+    Hold forearm vertical.  Swing wrist left/right to pan the robot base.
+
+    0°   = forearm points to the subject's right
+    90°  = forearm points toward camera  (forward / neutral)
+    180° = forearm points to the subject's left
     """
-    body_right = _unit(sh_l, sh_r)               # left → right shoulder
-
-    # MediaPipe +Y is downward, so world-up is (0, -1, 0)
-    world_up = np.array([0.0, -1.0, 0.0])
-
-    # Project world_up perpendicular to body_right to get a consistent body_up
-    body_up = world_up - np.dot(world_up, body_right) * body_right
-    up_norm = float(np.linalg.norm(body_up))
-    body_up = body_up / up_norm if up_norm > 1e-7 else world_up
-
-    body_forward = np.cross(body_right, body_up)  # already unit if inputs are
-
-    return body_right, body_up, body_forward
+    fw = wrist - elbow
+    horiz = np.array([fw[0], 0.0, fw[2]], dtype=float)
+    horiz_norm = float(np.linalg.norm(horiz))
+    if horiz_norm < 1e-7:
+        return 90   # forearm is perfectly vertical — hold neutral
+    angle = float(np.degrees(np.arctan2(horiz[0], -horiz[2])))
+    return _clamp(angle + 90.0)
 
 
-def _body_relative_pan_tilt(shoulder: np.ndarray,
-                             sh_l: np.ndarray,
-                             sh_r: np.ndarray,
-                             elbow:    np.ndarray,
-                             use_left_arm: bool) -> tuple[int, int]:
+def compute_wrist_tilt(elbow: np.ndarray, wrist: np.ndarray,
+                       wrist_h: np.ndarray, index_mcp: np.ndarray) -> int:
     """
-    Compute Base Pan and Shoulder Tilt in the body's local coordinate frame.
+    DoF 2 — Wrist Tilt (inclination / flexion-extension).
 
-    Invariant to body translation, body rotation (yaw/pitch/roll), and
-    camera angle — only the arm's pose relative to the torso matters.
+    Angle between the forearm axis (elbow→wrist) and the hand axis
+    (hand-wrist→index-MCP).
 
-    Base Pan
-    --------
-    Project the upper-arm vector onto the body's horizontal plane
-    (spanned by body_right × body_forward) and measure its signed angle
-    from body_forward.
+    0°   = wrist straight (hand continues forearm direction)
+    90°  = wrist bent 90°
+    180° = wrist bent fully back (uncommon in practice)
 
-    0°   = arm pointing straight out to the side  (away from body centre)
-    90°  = arm pointing straight forward           (in front of torso)
-    180° = arm crossing the body                  (toward opposite shoulder)
-
-    Shoulder Tilt
-    -------------
-    Angle between the upper-arm vector and body_up.
-
-    0°   = arm pointing straight up
-    90°  = arm horizontal
-    180° = arm pointing straight down
+    Incline/extend wrist forward to tilt the robot shoulder up.
     """
-    body_right, body_up, body_forward = _body_frame(sh_l, sh_r)
-    upper_arm = _unit(shoulder, elbow)
-
-    # ── Base Pan ───────────────────────────────────────────────────────────────
-    # Remove the body_up component to project onto the horizontal plane
-    proj = upper_arm - np.dot(upper_arm, body_up) * body_up
-    proj_norm = float(np.linalg.norm(proj))
-    if proj_norm > 1e-7:
-        proj = proj / proj_norm
-        cos_pan = float(np.clip(np.dot(proj, body_forward), -1.0, 1.0))
-        # Signed angle: positive = arm swinging toward body_right
-        sin_pan = float(np.dot(np.cross(body_forward, proj), body_up))
-        pan_deg = float(np.degrees(np.arctan2(sin_pan, cos_pan)))
-    else:
-        pan_deg = 0.0
-
-    # For the left arm the pan sign is mirrored so both arms map 90° = forward
-    if use_left_arm:
-        pan_deg = -pan_deg
-
-    base = _clamp(pan_deg + 90.0)   # shift signed angle → [0, 180]
-
-    # ── Shoulder Tilt ──────────────────────────────────────────────────────────
-    tilt = _clamp(_angle_deg(upper_arm, body_up))
-
-    return base, tilt
-
-
-# ── Individual servo calculations (elbow, wrist, gripper) ─────────────────────
-
-def compute_elbow_tilt(shoulder: np.ndarray, elbow: np.ndarray,
-                       wrist: np.ndarray) -> int:
-    """
-    Elbow Tilt: interior angle at the elbow joint.
-
-    0°   = fully bent (wrist near shoulder)
-    180° = arm fully extended / straight
-    """
-    to_shoulder = _unit(elbow, shoulder)
-    to_wrist    = _unit(elbow, wrist)
-    return _clamp(_angle_deg(to_shoulder, to_wrist))
-
-
-def compute_wrist_pitch(elbow: np.ndarray, wrist: np.ndarray,
-                        index_mcp: np.ndarray) -> int:
-    """
-    Wrist Pitch: flexion / extension of the hand relative to the forearm.
-
-    0°   = hand maximally flexed
-    90°  = wrist neutral / straight
-    180° = hand maximally extended
-    """
-    forearm_dir = _unit(wrist, elbow)
-    hand_dir    = _unit(wrist, index_mcp)
+    forearm_dir = _unit(elbow, wrist)
+    hand_dir    = _unit(wrist_h, index_mcp)
     return _clamp(_angle_deg(forearm_dir, hand_dir))
 
 
-def compute_wrist_roll(wrist: np.ndarray, index_mcp: np.ndarray,
-                       pinky_mcp: np.ndarray) -> int:
+def compute_wrist_roll(elbow: np.ndarray, wrist: np.ndarray,
+                       index_mcp: np.ndarray, pinky_mcp: np.ndarray) -> int:
     """
-    Wrist Roll (pronation / supination).
+    DoF 3 — Wrist Roll (rotation around the forearm axis).
 
-    0°   = palm facing down
-    90°  = palm facing sideways
-    180° = palm facing up
+    Measures the angle of the knuckle-span vector (index→pinky) projected
+    onto the plane perpendicular to the forearm, relative to world-right (+X).
+
+    Hold palm facing right → ~90° (neutral).
+    Rotate hand so palm faces up → ~180°.
+    Rotate hand so palm faces down → ~0°.
+
+    Roll the wrist to drive the robot elbow joint.
     """
-    knuckle_span = _unit(index_mcp, pinky_mcp)
-    elevation = float(np.degrees(np.arcsin(np.clip(-knuckle_span[1], -1.0, 1.0))))
-    return _clamp(elevation + 90.0)
+    forearm_dir = _unit(elbow, wrist)
 
+    # Knuckle span projected perpendicular to forearm axis
+    knuckle_raw  = index_mcp - pinky_mcp
+    knuckle_perp = _project_perp(knuckle_raw, forearm_dir)
+    kp_norm      = float(np.linalg.norm(knuckle_perp))
+    if kp_norm < 1e-7:
+        return 90
 
-def compute_gripper(thumb_tip: np.ndarray, index_tip: np.ndarray,
-                    open_ref: float = 0.10) -> int:
-    """
-    Gripper angle from thumb-tip to index-tip distance.
+    knuckle_perp = knuckle_perp / kp_norm
 
-    0°  = fingers pinched closed
-    90° = hand wide open
-    """
-    dist  = float(np.linalg.norm(thumb_tip - index_tip))
-    ratio = np.clip(dist / open_ref, 0.0, 1.0)
-    return _clamp(ratio * 90.0, lo=0.0, hi=90.0)
+    # Reference vector: world-right (+X) projected perp to forearm.
+    # Works well when the forearm is vertical (forearm ≈ −Y, so +X is
+    # already perpendicular).
+    world_right = np.array([1.0, 0.0, 0.0])
+    ref = _project_perp(world_right, forearm_dir)
+    ref_norm = float(np.linalg.norm(ref))
+    if ref_norm < 1e-7:
+        return 90
+
+    ref = ref / ref_norm
+
+    cos_r = float(np.clip(np.dot(knuckle_perp, ref), -1.0, 1.0))
+    sin_r = float(np.dot(np.cross(ref, knuckle_perp), forearm_dir))
+    roll  = float(np.degrees(np.arctan2(sin_r, cos_r)))
+    return _clamp(roll + 90.0)
 
 
 # ── Master conversion function ─────────────────────────────────────────────────
 
 def joints_to_angles(pose_landmarks: Any,
                      hand_landmarks: Any,
-                     use_left_arm: bool = True) -> Optional[list[int]]:
+                     use_left_arm: bool = False) -> Optional[list[int]]:
     """
-    Convert a frame's MediaPipe landmark objects into six servo angles.
+    Convert forearm + hand pose into three robot servo angles.
 
     Parameters
     ----------
-    pose_landmarks : landmark list from MediaPipe Pose (via _LandmarkList wrapper)
+    pose_landmarks : landmark list from MediaPipe Pose (via _LandmarkList)
     hand_landmarks : landmark list from MediaPipe Hands, or None
-    use_left_arm   : True  → track subject's LEFT arm
-                     False → track subject's RIGHT arm  (recommended for control)
+    use_left_arm   : False = right arm/hand (default for this control scheme)
+                     True  = left arm/hand
 
     Returns
     -------
-    [base, shoulder, elbow, wrist_pitch, wrist_roll, gripper] or None if
-    pose landmarks are absent.
+    [forearm_yaw, wrist_tilt, wrist_roll, 90, 90, 45]
+    First three entries drive the 3-DoF robot; last three are unused placeholders.
+    Returns None if pose landmarks are absent.
 
-    MediaPipe Pose landmark indices used:
-        11 = LEFT_SHOULDER   12 = RIGHT_SHOULDER
-        13 = LEFT_ELBOW      14 = RIGHT_ELBOW
-        15 = LEFT_WRIST      16 = RIGHT_WRIST
+    Pose landmark indices:
+        13 = LEFT_ELBOW    14 = RIGHT_ELBOW
+        15 = LEFT_WRIST    16 = RIGHT_WRIST
     """
     if pose_landmarks is None:
         return None
 
     lm = pose_landmarks.landmark
 
-    if use_left_arm:
-        s_idx, e_idx, w_idx = 11, 13, 15
-    else:
-        s_idx, e_idx, w_idx = 12, 14, 16
+    e_idx, w_idx = (13, 15) if use_left_arm else (14, 16)
 
-    shoulder   = _lm_to_np(lm[s_idx])
-    elbow      = _lm_to_np(lm[e_idx])
-    wrist_pose = _lm_to_np(lm[w_idx])
-    sh_l       = _lm_to_np(lm[11])
-    sh_r       = _lm_to_np(lm[12])
+    elbow = _lm_to_np(lm[e_idx])
+    wrist = _lm_to_np(lm[w_idx])
 
-    # Body-relative pan and tilt — unaffected by body translation or rotation
-    base, shoulder_angle = _body_relative_pan_tilt(
-        shoulder, sh_l, sh_r, elbow, use_left_arm
-    )
-    elbow_angle = compute_elbow_tilt(shoulder, elbow, wrist_pose)
+    # DoF 1: always computable from pose alone
+    forearm_yaw = compute_forearm_yaw(elbow, wrist)
 
-    # Default wrist / gripper values during hand-detection dropout
-    wrist_pitch = 90
-    wrist_roll  = 90
-    gripper     = 45
+    # DoF 2 & 3: need hand landmarks
+    wrist_tilt = 90
+    wrist_roll = 90
 
     if hand_landmarks is not None:
         hl = hand_landmarks.landmark
-        wrist_h   = _lm_to_np(hl[0])
-        index_mcp = _lm_to_np(hl[5])
-        pinky_mcp = _lm_to_np(hl[17])
-        thumb_tip = _lm_to_np(hl[4])
-        index_tip = _lm_to_np(hl[8])
 
-        wrist_pitch = compute_wrist_pitch(wrist_pose, wrist_h, index_mcp)
-        wrist_roll  = compute_wrist_roll(wrist_h, index_mcp, pinky_mcp)
-        gripper     = compute_gripper(thumb_tip, index_tip)
+        wrist_h   = _lm_to_np(hl[0])    # WRIST
+        index_mcp = _lm_to_np(hl[5])    # INDEX_FINGER_MCP
+        pinky_mcp = _lm_to_np(hl[17])   # PINKY_MCP
 
-    return [base, shoulder_angle, elbow_angle, wrist_pitch, wrist_roll, gripper]
+        wrist_tilt = compute_wrist_tilt(elbow, wrist, wrist_h, index_mcp)
+        wrist_roll = compute_wrist_roll(elbow, wrist, index_mcp, pinky_mcp)
+
+    return [forearm_yaw, wrist_tilt, wrist_roll, 90, 90, 45]

@@ -1,16 +1,19 @@
 """
-angle_mapper.py — Converts Wasabi-MK1 human servo angles (degrees) to
+angle_mapper.py — Converts forearm+hand control angles (degrees) to
                   MuJoCo 3-DoF arm joint angles (radians).
 
-Human arm convention (from kinematics.py):
-  Base Pan     0–180°   0° = arm swept right, 90° = forward, 180° = arm swept left
-  Shoulder     0–180°   0° = arm straight up,  90° = horizontal, 180° = arm down
-  Elbow Tilt   0–180°   0° = fully bent,        180° = arm fully extended / straight
+Control posture: forearm vertical, elbow pointing down.
 
-Robot joint convention (mujoco_sim.py):
-  joint_base     [-π/2, π/2]  rad   (arm pan; 0 = centred)
-  joint_shoulder [0,    π/2]  rad   (arm up = 0, arm horizontal = π/2)
-  joint_elbow    [0,    2.27] rad   (arm straight = 0, fully bent ≈ 130° = 2.27 rad)
+Human gesture → Robot joint mapping:
+
+  DoF 1  Forearm Yaw   [0–180°]  swing wrist L/R  → joint_base   [−π/2, π/2]
+  DoF 2  Wrist Tilt    [0–180°]  incline wrist     → joint_shoulder[0,   π/2]
+  DoF 3  Wrist Roll    [0–180°]  rotate hand       → joint_elbow  [0,   2.27 rad]
+
+Neutral posture (forearm vertical, wrist straight, palm facing right):
+  forearm_yaw ≈ 90°  →  base     = 0 rad  (centred)
+  wrist_tilt  ≈  0°  →  shoulder = 0 rad  (arm pointing up)
+  wrist_roll  ≈ 90°  →  elbow    = 1.13 rad (half bent)
 """
 
 from __future__ import annotations
@@ -19,48 +22,37 @@ import math
 import numpy as np
 
 
-# ── Per-joint safe clamping ranges (degrees, before conversion) ───────────────
-
-_BASE_RANGE     = (-90.0,  90.0)   # ±90° pan from centre
-_SHOULDER_RANGE = (  0.0,  90.0)   # raise arm from vertical to horizontal
-_ELBOW_RANGE    = (  0.0, 130.0)   # 0 = straight, 130 = max bend
-
-
 def human_to_robot(
-    base_deg:     float,
-    shoulder_deg: float,
-    elbow_deg:    float,
+    forearm_yaw_deg: float,
+    wrist_tilt_deg:  float,
+    wrist_roll_deg:  float,
 ) -> tuple[float, float, float]:
     """
-    Map three human-arm angles to MuJoCo joint setpoints in radians.
+    Map forearm+hand angles to MuJoCo joint setpoints (radians).
 
     Parameters
     ----------
-    base_deg     : Human base-pan angle  [0–180°]
-    shoulder_deg : Human shoulder angle  [0–180°]
-    elbow_deg    : Human elbow angle     [0–180°]
+    forearm_yaw_deg : Forearm yaw   [0–180°]  (90° = forward / neutral)
+    wrist_tilt_deg  : Wrist tilt    [0–180°]  (0°  = straight, 90° = bent 90°)
+    wrist_roll_deg  : Wrist roll    [0–180°]  (90° = palm-right / neutral)
 
     Returns
     -------
-    (base_rad, shoulder_rad, elbow_rad) — clamped to each joint's safe range.
+    (base_rad, shoulder_rad, elbow_rad) clamped to each joint's safe range.
     """
-    # Base: human 90° = arm forward → robot 0° (centred).  Linear map ±90°.
-    base_mapped = base_deg - 90.0
-    base_rad    = math.radians(
-        float(np.clip(base_mapped, *_BASE_RANGE))
-    )
+    # DoF 1 → joint_base [-π/2, π/2]
+    # 90° yaw (forward) = 0 rad centred; swing ±90° maps to ±π/2
+    base_rad = math.radians(float(np.clip(forearm_yaw_deg - 90.0, -90.0, 90.0)))
 
-    # Shoulder: human 0° (arm up) → robot 0°; human 90° (horizontal) → π/2.
-    # Clamp to [0, 90°] — arm is not driven below horizontal.
-    shoulder_rad = math.radians(
-        float(np.clip(shoulder_deg, *_SHOULDER_RANGE))
-    )
+    # DoF 2 → joint_shoulder [0, π/2]
+    # 0° tilt (wrist straight) = arm up (0 rad); 90° tilt = arm horizontal (π/2)
+    shoulder_rad = math.radians(float(np.clip(wrist_tilt_deg, 0.0, 90.0)))
 
-    # Elbow: human 180° (straight) → robot 0°; human 0° (bent) → 130° (2.27 rad).
-    # Invert: more-bent human elbow → larger positive robot joint angle.
-    elbow_mapped = 180.0 - elbow_deg
-    elbow_rad    = math.radians(
-        float(np.clip(elbow_mapped, *_ELBOW_RANGE))
-    )
+    # DoF 3 → joint_elbow [0, 2.27 rad = 130°]
+    # Wrist roll 0°   (palm down) → elbow   0° (straight)
+    # Wrist roll 90°  (palm side) → elbow  65° (half bent)
+    # Wrist roll 180° (palm up)   → elbow 130° (fully bent)
+    elbow_deg = float(np.clip(wrist_roll_deg / 180.0 * 130.0, 0.0, 130.0))
+    elbow_rad = math.radians(elbow_deg)
 
     return base_rad, shoulder_rad, elbow_rad
