@@ -52,7 +52,7 @@ from simulation.angle_mapper import human_to_robot
 
 CAMERA_INDEX : int   = 0       # 0 = default webcam, 1+ = external
 TARGET_FPS   : int   = 30      # target loop rate for tracking + display
-USE_LEFT_ARM : bool  = True    # True = subject's left arm (mirror mode)
+USE_LEFT_ARM : bool  = False   # False = subject's RIGHT arm drives the robot
 SMOOTH_ALPHA : float = 0.25    # EMA smoothing — lower = smoother but laggier
 POSE_CONF    : float = 0.60    # MediaPipe Pose detection confidence
 HAND_CONF    : float = 0.60    # MediaPipe Hands detection confidence
