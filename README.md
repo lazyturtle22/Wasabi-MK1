@@ -23,6 +23,11 @@ right arm visible; hips in frame improves accuracy but is not required.
 The red sphere in the sim is the raw tracking target — the gripper chasing it
 shows you the system's precision directly. Press **Q**/**ESC** to quit.
 
+An orange cube sits on a stand in front of the arm: reach to it, pinch your
+thumb and index finger to close the gripper, and lift. Press **Backspace** in
+the MuJoCo window to put the cube back if it drops. (Grasping needs the
+default dynamics mode — in `--kinematic` mode physics is frozen.)
+
 ```bash
 python main.py --kinematic         # zero-lag exact rendering (precision check)
 python main.py --mode joint        # mimic your joint angles instead of hand position
@@ -68,6 +73,9 @@ python tests/test_retarget.py
 All knobs live in `RetargetConfig` (`retarget.py`):
 
 * `min_cutoff` / `beta` — One-Euro smoothness vs responsiveness.
+* `yaw_gain` — base-pan amplification (default 1.5). Humans rotate their
+  shoulders along with an arm sweep and the torso frame subtracts that, so
+  gain > 1 makes the base feel full-range. Raise it if base pan feels weak.
 * `base_sign`, `roll_sign` — flip to ±1 if a joint feels inverted on your setup.
 * `mirror` — mirror-image mapping (default; feels natural facing a camera).
 * `l1`, `l2`, joint ranges — robot geometry; must match `simulation/arm.xml`.

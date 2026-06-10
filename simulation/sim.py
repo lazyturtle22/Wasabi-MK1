@@ -45,6 +45,8 @@ class ArmSim:
 
         self._qadr = [self.model.jnt_qposadr[self.model.joint(n).id]
                       for n in _JOINTS]
+        self._dofadr = [self.model.jnt_dofadr[self.model.joint(n).id]
+                        for n in _JOINTS]
         self._mocap_id = self.model.body("target").mocapid[0]
 
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
@@ -60,9 +62,11 @@ class ArmSim:
             self.data.mocap_pos[self._mocap_id] = SHOULDER_POS + targets.target_xyz
 
         if self.kinematic:
-            for adr, val in zip(self._qadr, q):
+            # Only the arm is kinematically frozen — the cube keeps its own
+            # free-joint state (it just won't fall, since physics isn't stepped).
+            for adr, dof, val in zip(self._qadr, self._dofadr, q):
                 self.data.qpos[adr] = val
-            self.data.qvel[:] = 0.0
+                self.data.qvel[dof] = 0.0
             mujoco.mj_forward(self.model, self.data)
         else:
             self.data.ctrl[:len(q)] = q

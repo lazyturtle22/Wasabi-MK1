@@ -52,9 +52,10 @@ def make_pose(elbow_off, wrist_off):
     return pts
 
 
-def run_frames(pose, hand=None, mode="ik", mirror=True, n=40):
+def run_frames(pose, hand=None, n=40, **cfg_overrides):
     """Feed the same landmarks repeatedly so filters/slew converge."""
-    rt = ArmRetargeter(RetargetConfig(mode=mode, mirror=mirror))
+    cfg_overrides.setdefault("yaw_gain", 1.0)   # sign tests want raw angles
+    rt = ArmRetargeter(RetargetConfig(**cfg_overrides))
     out = None
     for i in range(n):
         out = rt.update(0.033 * (i + 1), pose, hand)
@@ -158,6 +159,17 @@ def test_end_effector_tracks_hand():
     p = fk(out.base, out.shoulder, out.elbow, cfg.l1, cfg.l2)
     assert np.linalg.norm(p - out.target_xyz) < 0.01, \
         f"EE {p} vs target {out.target_xyz}"
+
+
+def test_yaw_gain_amplifies_azimuth():
+    # Arm halfway between forward and the subject's right: human azimuth 45°.
+    pose = make_pose([-0.20, 0, -0.20], [-0.19, 0, -0.19])
+    out = run_frames(pose, yaw_gain=1.5)
+    close(out.base, math.radians(67.5), tol_deg=5.0)
+    # End-effector must still land on the (gain-rotated) displayed target.
+    cfg = RetargetConfig()
+    p = fk(out.base, out.shoulder, out.elbow, cfg.l1, cfg.l2)
+    assert np.linalg.norm(p - out.target_xyz) < 0.01
 
 
 # ── Joint mode ─────────────────────────────────────────────────────────────────

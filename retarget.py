@@ -85,9 +85,15 @@ class RetargetConfig:
 
     # Gating / robustness
     visibility_min: float = 0.5    # pose landmarks below this are untrusted
-    yaw_lock_lo: float = 0.10      # horiz. reach fraction below which yaw is frozen
-    yaw_lock_hi: float = 0.25      # ...and above which yaw fully tracks
+    yaw_lock_lo: float = 0.06      # horiz. reach fraction below which yaw is frozen
+    yaw_lock_hi: float = 0.15      # ...and above which yaw fully tracks
     dropout_reset_s: float = 0.7   # tracking gap that resets the filters
+
+    # Base-yaw response. Humans rotate their shoulders along with an arm
+    # sweep, and the torso frame subtracts that rotation — so the raw
+    # torso-relative azimuth feels muted. Gain > 1 restores a full-feeling
+    # sweep of the base joint.
+    yaw_gain: float = 1.5
 
     # Output conditioning
     max_joint_speed: float = 12.0  # rad/s slew limit on joint commands
@@ -243,12 +249,13 @@ def solve_ik(target: np.ndarray, l1: float, l2: float,
 
 def joint_angles_direct(upper_rob: np.ndarray, s_world: np.ndarray,
                         e_world: np.ndarray, w_world: np.ndarray,
-                        prev_yaw: float, lock_lo: float, lock_hi: float
-                        ) -> tuple[float, float, float]:
+                        prev_yaw: float, lock_lo: float, lock_hi: float,
+                        yaw_gain: float = 1.0) -> tuple[float, float, float]:
     """Pose-mimicry mapping: copy the human's own joint angles onto the robot."""
     h = math.hypot(upper_rob[0], upper_rob[1])
     n = float(np.linalg.norm(upper_rob))
-    raw_yaw = math.atan2(upper_rob[1], upper_rob[0]) if h > 1e-9 else prev_yaw
+    raw_yaw = (yaw_gain * math.atan2(upper_rob[1], upper_rob[0])
+               if h > 1e-9 else prev_yaw)
     w = _smoothstep((h / max(n, 1e-9) - lock_lo) / max(lock_hi - lock_lo, 1e-6))
     q1 = prev_yaw + w * _ang_diff(prev_yaw, raw_yaw)
 
@@ -390,13 +397,19 @@ class ArmRetargeter:
                                 float(np.linalg.norm(W - E)))
         if cfg.mode == "ik":
             target = self._to_robot(wrist_t) * scale
+            if cfg.yaw_gain != 1.0:
+                # Amplify the target's azimuth (not q1 after the solve) so the
+                # end-effector still lands exactly on the displayed target.
+                h_t = math.hypot(target[0], target[1])
+                az = cfg.yaw_gain * math.atan2(target[1], target[0])
+                target[0], target[1] = h_t * math.cos(az), h_t * math.sin(az)
             q1, q2, q3, target = solve_ik(
                 target, cfg.l1, cfg.l2, out.base, cfg.yaw_lock_lo, cfg.yaw_lock_hi)
             out.target_xyz = target
         else:
             q1, q2, q3 = joint_angles_direct(
                 self._to_robot(upper_t), S, E, W,
-                out.base, cfg.yaw_lock_lo, cfg.yaw_lock_hi)
+                out.base, cfg.yaw_lock_lo, cfg.yaw_lock_hi, cfg.yaw_gain)
             out.target_xyz = fk(q1, q2, q3, cfg.l1, cfg.l2)
         out.scale = scale
 
