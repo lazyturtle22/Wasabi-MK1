@@ -1,0 +1,92 @@
+<mujoco model="wasabi_mk1">
+  <!--
+    Wasabi-MK1 simulated arm: base yaw + shoulder pitch + elbow (the 3 DoF)
+    plus wrist roll and a 2-finger pinch gripper.
+
+    Frame convention (must match retarget.py):
+      x = forward, y = left, z = up. Shoulder joint at z = 0.66.
+      Link lengths: upper arm 0.30 m, elbow-to-EE 0.25 m (RetargetConfig.l1/l2).
+
+    Contact is disabled: this model is a precision teleoperation visualizer,
+    not a contact-dynamics testbed.
+  -->
+  <compiler angle="radian" autolimits="true"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast">
+    <flag contact="disable"/>
+  </option>
+
+  <visual>
+    <headlight ambient="0.3 0.3 0.3" diffuse="0.7 0.7 0.7"/>
+    <global azimuth="160" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.25 0.35 0.45" rgb2="0.05 0.07 0.10" width="256" height="256"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.15 0.18 0.20" rgb2="0.22 0.26 0.30" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="6 6" reflectance="0.1"/>
+    <material name="metal" rgba="0.55 0.60 0.65 1" reflectance="0.3"/>
+    <material name="accent" rgba="0.10 0.75 0.35 1"/>
+    <material name="dark" rgba="0.18 0.20 0.22 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="1 -1 2.5" dir="-1 1 -2.5" diffuse="0.8 0.8 0.8"/>
+    <geom name="floor" type="plane" size="2 2 0.05" material="grid"/>
+
+    <!-- Red sphere = raw IK target. The gripper tip chasing it makes
+         tracking precision directly visible. -->
+    <body name="target" mocap="true" pos="0.40 0 0.66">
+      <geom type="sphere" size="0.012" rgba="1 0.25 0.2 0.8" contype="0" conaffinity="0"/>
+    </body>
+
+    <body name="pedestal" pos="0 0 0">
+      <geom type="cylinder" size="0.09 0.02" pos="0 0 0.02" material="dark"/>
+      <geom type="cylinder" size="0.035 0.305" pos="0 0 0.345" material="dark"/>
+
+      <body name="shoulder_yaw" pos="0 0 0.66">
+        <joint name="base_yaw" axis="0 0 1" range="-2.094 2.094" damping="5" armature="0.1"/>
+        <geom type="cylinder" size="0.045 0.03" material="metal"/>
+
+        <body name="upper_arm">
+          <joint name="shoulder_pitch" axis="0 -1 0" range="-1.658 1.658" damping="5" armature="0.1"/>
+          <geom type="capsule" fromto="0 0 0  0.30 0 0" size="0.028" material="metal"/>
+
+          <body name="forearm" pos="0.30 0 0">
+            <joint name="elbow" axis="0 -1 0" range="0 2.618" damping="4" armature="0.08"/>
+            <geom type="sphere" size="0.032" material="accent"/>
+            <geom type="capsule" fromto="0 0 0  0.16 0 0" size="0.022" material="metal"/>
+
+            <body name="wrist" pos="0.16 0 0">
+              <joint name="wrist_roll" axis="1 0 0" range="-3.1416 3.1416" damping="1.5" armature="0.03"/>
+              <geom type="box" pos="0.045 0 0" size="0.035 0.030 0.009" material="accent"/>
+              <site name="ee" pos="0.09 0 0" size="0.008" rgba="0.1 0.9 0.4 1"/>
+
+              <body name="finger_l" pos="0.08 0.020 0">
+                <joint name="finger_l" axis="0 0 -1" range="0 0.7" damping="0.3" armature="0.01"/>
+                <geom type="capsule" fromto="0 0 0  0.055 0 0" size="0.006" material="dark"/>
+              </body>
+              <body name="finger_r" pos="0.08 -0.020 0">
+                <joint name="finger_r" axis="0 0 1" range="0 0.7" damping="0.3" armature="0.01"/>
+                <geom type="capsule" fromto="0 0 0  0.055 0 0" size="0.006" material="dark"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="base_yaw"      joint="base_yaw"      kp="300" kv="15"  ctrlrange="-2.094 2.094"/>
+    <position name="shoulder_pitch" joint="shoulder_pitch" kp="300" kv="15"  ctrlrange="-1.658 1.658"/>
+    <position name="elbow"         joint="elbow"         kp="200" kv="10"  ctrlrange="0 2.618"/>
+    <position name="wrist_roll"    joint="wrist_roll"    kp="60"  kv="3"   ctrlrange="-3.1416 3.1416"/>
+    <position name="finger_l"      joint="finger_l"      kp="15"  kv="0.5" ctrlrange="0 0.7"/>
+    <position name="finger_r"      joint="finger_r"      kp="15"  kv="0.5" ctrlrange="0 0.7"/>
+  </actuator>
+
+  <keyframe>
+    <key name="home" qpos="0 0.5 0.9 0 0 0" ctrl="0 0.5 0.9 0 0 0"/>
+  </keyframe>
+</mujoco>

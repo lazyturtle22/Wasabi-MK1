@@ -1,70 +1,98 @@
 """
-filters.py - Low-pass filters to smooth servo angle signals.
+filters.py — Signal conditioning for real-time teleoperation.
 
-Two strategies are provided:
-  - ExponentialSmoothing : lightweight, single-parameter, zero memory overhead.
-  - MovingAverageFilter  : equal-weight window, trades latency for stability.
+OneEuroFilter
+    The standard filter for human-motion teleop (Casiez et al., CHI 2012).
+    Adaptive low-pass: heavy smoothing when the signal is slow (kills jitter),
+    light smoothing when it moves fast (kills lag). Vastly better than a
+    fixed-alpha EMA for this use case. Operates element-wise on numpy arrays,
+    so one instance can filter a whole (N, 3) stack of landmarks.
 
-Use ExponentialSmoothing (alpha ≈ 0.20–0.30) for real-time teleoperation;
-switch to MovingAverageFilter if your camera produces bursty dropout spikes.
+SlewRateLimiter
+    Hard cap on output velocity (rad/s). Applied to the final joint commands
+    as a safety layer — essential once this drives real servos.
 """
 
-import collections
+from __future__ import annotations
+
+import math
+
 import numpy as np
 
 
-class ExponentialSmoothing:
+class OneEuroFilter:
+    """Element-wise One Euro filter over arbitrarily-shaped numpy arrays.
+
+    Parameters
+    ----------
+    min_cutoff : baseline cutoff frequency in Hz. Lower = smoother when still.
+    beta       : speed coefficient. Higher = snappier response to fast motion.
+    d_cutoff   : cutoff for the internal derivative estimate (1 Hz is standard).
     """
-    Exponential Moving Average (EMA) low-pass filter — one alpha per channel.
 
-    Formula:  y[t] = alpha * x[t]  +  (1 - alpha) * y[t-1]
+    def __init__(self, min_cutoff: float = 1.0, beta: float = 0.5,
+                 d_cutoff: float = 1.0):
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+        self._x: np.ndarray | None = None
+        self._dx: np.ndarray | None = None
+        self._t: float | None = None
 
-    alpha → 1 : tracks input instantly (more servo jitter)
-    alpha → 0 : heavily damped (sluggish but very stable)
-    """
-
-    def __init__(self, alpha: float = 0.20, num_channels: int = 6):
-        if not 0.0 < alpha <= 1.0:
-            raise ValueError("alpha must be in (0, 1]")
-        self.alpha = alpha
-        self.num_channels = num_channels
-        self._state: np.ndarray | None = None
-
-    def update(self, new_values: list[float]) -> list[float]:
-        """Feed one sample; returns the smoothed values for all channels."""
-        arr = np.asarray(new_values, dtype=float)
-        if self._state is None:
-            self._state = arr.copy()
-        else:
-            self._state = self.alpha * arr + (1.0 - self.alpha) * self._state
-        return self._state.tolist()
+    @staticmethod
+    def _alpha(cutoff, dt: float):
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / dt)
 
     def reset(self) -> None:
-        """Clear filter state (e.g., after a tracking dropout)."""
-        self._state = None
+        self._x = None
+        self._dx = None
+        self._t = None
+
+    def __call__(self, x, t: float) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        if self._x is None or self._t is None:
+            self._x = x.copy()
+            self._dx = np.zeros_like(x)
+            self._t = t
+            return self._x
+
+        dt = t - self._t
+        if dt <= 1e-6:
+            return self._x
+        self._t = t
+
+        dx = (x - self._x) / dt
+        a_d = self._alpha(self.d_cutoff, dt)
+        self._dx = a_d * dx + (1.0 - a_d) * self._dx
+
+        cutoff = self.min_cutoff + self.beta * np.abs(self._dx)
+        a = self._alpha(cutoff, dt)
+        self._x = a * x + (1.0 - a) * self._x
+        return self._x
 
 
-class MovingAverageFilter:
-    """
-    Simple sliding-window moving average.
+class SlewRateLimiter:
+    """Clamp per-channel rate of change to max_rate (units/s)."""
 
-    Larger 'window' reduces jitter at the cost of added latency
-    (latency ≈ window / 2 frames).
-    """
-
-    def __init__(self, window: int = 8, num_channels: int = 6):
-        if window < 1:
-            raise ValueError("window must be >= 1")
-        self.window = window
-        self._bufs = [collections.deque(maxlen=window) for _ in range(num_channels)]
-
-    def update(self, new_values: list[float]) -> list[float]:
-        smoothed = []
-        for buf, val in zip(self._bufs, new_values):
-            buf.append(val)
-            smoothed.append(sum(buf) / len(buf))
-        return smoothed
+    def __init__(self, max_rate: float):
+        self.max_rate = float(max_rate)
+        self._x: np.ndarray | None = None
+        self._t: float | None = None
 
     def reset(self) -> None:
-        for buf in self._bufs:
-            buf.clear()
+        self._x = None
+        self._t = None
+
+    def __call__(self, x, t: float) -> np.ndarray:
+        x = np.asarray(x, dtype=float)
+        if self._x is None or self._t is None:
+            self._x = x.copy()
+            self._t = t
+            return self._x
+
+        dt = max(t - self._t, 1e-6)
+        self._t = t
+        step = np.clip(x - self._x, -self.max_rate * dt, self.max_rate * dt)
+        self._x = self._x + step
+        return self._x
